@@ -595,31 +595,6 @@ class BartVaeModel(BartPretrainedModel):
 
 
         assert encoder_outputs is not None
-        # if encoder_outputs is None:
-        #     encoder_outputs = self.encoder(
-        #         input_ids=input_ids,
-        #         attention_mask=attention_mask,
-        #         head_mask=head_mask,
-        #         inputs_embeds=inputs_embeds,
-        #         output_attentions=output_attentions,
-        #         output_hidden_states=output_hidden_states,
-        #         return_dict=return_dict,
-        #     )
-        #     if latent_z is not None:
-        #         if self.latent_embed_src:
-        #             encoder_hidden_states = encoder_outputs[0]
-        #             # print(encoder_hidden_states.size())
-        #             encoder_hidden_states = encoder_hidden_states + latent_z
-        #             encoder_outputs = (encoder_hidden_states,) + encoder_outputs[1:]
-        #         if self.latent_memory:
-        #             encoder_hidden_states = encoder_outputs[0]
-        #             hidden_states = torch.cat((encoder_hidden_states, latent_z), dim=1)
-        #             encoder_outputs = (hidden_states,) + encoder_outputs[1:]
-        #
-        #             pad_mask = torch.ones((attention_mask.size(0), 1), dtype=attention_mask.dtype,
-        #                                   device=attention_mask.device)
-        #             attention_mask = torch.cat((attention_mask, pad_mask), dim=1)
-
 
         # If the user passed a tuple for encoder_outputs, we wrap it in a BaseModelOutput when return_dict=True
         if return_dict and not isinstance(encoder_outputs, BaseModelOutput):
@@ -684,19 +659,14 @@ class KGBartVaeForConditionalGeneration(BartPretrainedModel):
         self.latent_embed_trg = latent_embed_trg
         self.latent_memory = latent_memory
 
-        # self.enc_hidden_linear = nn.Linear(2 * config.d_model, 2 * config.d_model)
-        # self.enc_graph_linear = nn.Linear(3 * config.d_model, config.d_model)
+
         self.hop_num, self.gamma = hop_num, gamma
         self.evtneg_weight = evtneg_weight
-        # self.evtkg_lambda = evtkg_lambda
         self.topk = topk
         self.relation_embd = nn.Embedding(20, config.d_model)
-        # self.W_s = nn.ModuleList([nn.Linear(config.d_model, config.d_model, bias=False) for _ in range(self.hop_num)])
-        # self.W_n = nn.ModuleList([nn.Linear(config.d_model, config.d_model, bias=False) for _ in range(self.hop_num)])
-        # self.W_r = nn.ModuleList([nn.Linear(config.d_model, config.d_model, bias=False) for _ in range(self.hop_num)])
+
         self.triple_linear = nn.Linear(config.d_model * 3, config.d_model, bias=False)
-        # self.dec_input_linear = nn.Linear(config.d_model * 2, config.d_model, bias=False)
-        # self.soft_label_linear = nn.Linear(config.d_model, config.d_model)
+
         self.c2e_w = nn.Linear(config.d_model, config.d_model, bias=False)
         self.dropout = nn.Dropout(0.1)
         self.pad_id = pad_id
@@ -839,14 +809,11 @@ class KGBartVaeForConditionalGeneration(BartPretrainedModel):
 
         event_memory = self.model.shared(event_node_ids)
         event_pad_mask = (event_node_ids != self.pad_id).long()
-        # event_memory.sum(dim=2)/event_pad_mask.unsqueeze(-1).sum(dim=2, keepdim=True)
 
         weight = event_pad_mask / event_pad_mask.sum(2, keepdim=True)
         event_pooled_out = torch.sum(event_memory * weight.unsqueeze(-1), dim=2)
-        # max_pooled_event_memory = event_memory.max(dim=2)[0]
         rel_repr = self.relation_embd(relation)
-        # node_repr, rel_repr = self.multi_layer_comp_gcn(
-        #     max_pooled_event_memory, rel_repr, head, tail, event_label, triple_label, layer_number=self.hop_num)
+
         node_repr = event_pooled_out
         head_repr = torch.gather(
             node_repr, 1, head.unsqueeze(-1).expand(node_repr.size(0), head.size(1), node_repr.size(-1)))
@@ -859,14 +826,12 @@ class KGBartVaeForConditionalGeneration(BartPretrainedModel):
         encoder_states = self.model.encoder(input_ids=src_input_ids, attention_mask=src_attention_mask)[0]
         weight = src_attention_mask / src_attention_mask.sum(1, keepdim=True)
         max_pooled_src_memory = torch.sum(encoder_states * weight.unsqueeze(-1), dim=1)
-        # max_pooled_src_memory = encoder_states.max(dim=1)[0]
         mapped_src = torch.tanh(self.c2e_w(max_pooled_src_memory))
 
         sigmoid = nn.Sigmoid()
         # bsz x 1 x mem_t
         triple_score = sigmoid(torch.matmul(mapped_src.unsqueeze(1), triple_embed.transpose(1, 2)))
-        # triple_score = triple_score.masked_fill((triple_label == -1).unsqueeze(1), 0)
-        # # # aggregate probability to nodes
+
         unorm_evt_probs = self.multi_hop(
             triple_prob=triple_score,
             distance=event_distance,
@@ -882,11 +847,9 @@ class KGBartVaeForConditionalGeneration(BartPretrainedModel):
         evt_probs = sigmoid(unorm_evt_probs)
 
         k = self.topk
-        # mask之后选是不可行的，允许选到pad-evt，因为并不是所有的图都有support-event
-        # masked_evt_prob = evt_probs.masked_fill(event_label == -1, 0)
+
         masked_evt_prob = evt_probs.masked_fill(event_distance == 0, 0)
         val, indices = masked_evt_prob.topk(k, dim=1)  # indices: [bs, k]
-        # TODO, 如果val小于thres，设为pad
         bsz, evtnum, evtlen = event_node_ids.size()
         evt_tokens = event_node_ids.gather(1, indices.detach().unsqueeze(2).expand(bsz, k, evtlen))
         top_evt = evt_tokens.reshape((bsz, k * evtlen))

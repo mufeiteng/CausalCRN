@@ -284,13 +284,7 @@ class BartVaeSeq2Seq(nn.Module):
             self, latent_z, gumbel_src_input_ids, gumbel_src_attn_mask,
             gumbel_trg_input_ids, gumbel_trg_attn_mask, gumbel_temperature=0.7):
         fn = self.transformer.model.decoder
-        # decoder_inputs_embeds = fn.embed_tokens(gumbel_trg_input_ids)
-        # # decoder_inputs_embeds = decoder_inputs_embeds * fn.embed_scale
-        # noise = torch.randn(decoder_inputs_embeds.size(), device=decoder_inputs_embeds.device)
-        # decoder_inputs_embeds = (decoder_inputs_embeds + noise) * fn.embed_scale
-        # #
-        # drop_fn = torch.nn.Dropout(p=0.1)
-        # decoder_inputs_embeds = drop_fn(decoder_inputs_embeds)
+
         pos_gumbel_outputs = self.transformer(
             input_ids=gumbel_src_input_ids, attention_mask=gumbel_src_attn_mask,
             decoder_input_ids=gumbel_trg_input_ids,
@@ -305,12 +299,6 @@ class BartVaeSeq2Seq(nn.Module):
         gumbel_weights = gumbel_softmax(gumbel_logits, gumbel_temperature, hard=False,
                                             use_gumbel=True)
 
-        # logits, gumbel_weights, sample_mask, greedy_ids = self.gumbel_sequence_sample(
-        #     gumbel_input_ids, gumbel_attn_mask, latent_z,
-        #     temperature=self.args.gumbel_temperature, max_length=80, use_gumbel=True, hard=False)
-
-        # pad_mask = torch.ones((logits.size(0), 1), device=logits.device, dtype=torch.long)
-        # attn_mask = torch.cat((pad_mask, sample_mask[:, :-1]), dim=1)
 
         inputs_embeds = torch.matmul(gumbel_weights, self.classifier.model.encoder.embed_tokens.weight)
         # inputs_embeds = inputs_embeds * gumbel_trg_attn_mask.unsqueeze(-1)
@@ -483,70 +471,11 @@ class BartVaeSeq2Seq(nn.Module):
             latent_z=post_z, prior_pooled=prior_pooled)
 
 
-        """
-        理想的是自回归x',y',x->y_hat，但是太慢。现在用teacher force，但是加噪
-        生成了y_hat, x,y_hat->1, x',y_hat->0
-        x,y_hat->z_hat, L(z_hat,z')
-        """
-        # rec_logits = outputs[1]
-        #
-        # gumbel_weights = gumbel_softmax(rec_logits, self.args.gumbel_temperature, hard=False,
-        #                                 use_gumbel=True)
-        #
-        # rec_gened_inputs_embeds = torch.matmul(gumbel_weights, self.transformer.model.decoder.embed_tokens.weight)
-        # rec_gened_inputs_embeds = rec_gened_inputs_embeds * self.transformer.model.decoder.embed_scale
-        # rec_gened_inputs_embeds = rec_gened_inputs_embeds * decoder_attention_mask.unsqueeze(-1)
-        #
-        # l1_norm_1 = self.l1_norm_penalty(rec_gened_inputs_embeds, decoder_attention_mask,
-        #                      gumbel_trg_pos_input_ids, gumbel_trg_pos_attn_mask)
-        #
-        # pos_x_inputs_embeds = self.gumbel_sampling(
-        #     latent_z, gumbel_src_input_ids, gumbel_src_attn_mask,
-        #     gumbel_trg_pos_input_ids, gumbel_trg_pos_attn_mask,
-        # )
-        # fn = self.transformer.model.decoder
-        # pos_x_inputs_embeds = pos_x_inputs_embeds * fn.embed_scale
-        #
-        # l1_norm_2 = self.l1_norm_penalty(pos_x_inputs_embeds, gumbel_trg_pos_attn_mask,
-        #                      gumbel_trg_pos_input_ids, gumbel_trg_pos_attn_mask)
-        #
-        # l1_norm = (l1_norm_1+l1_norm_2)/2
-
-        # xprime_inputs_embeds = fn.embed_tokens(gumbel_trg_neg_input_ids) * fn.embed_scale
-        # mask_matrix = torch.bmm(
-        #     gumbel_trg_pos_attn_mask.unsqueeze(-1),
-        #     gumbel_trg_neg_attn_mask.unsqueeze(1)
-        # ).float()
-        # inner_product = torch.bmm(
-        #     self.bilinear(pos_x_inputs_embeds),
-        #     xprime_inputs_embeds.transpose(1, 2)
-        # )
-        # l1_norm = torch.abs(inner_product * mask_matrix).sum() / mask_matrix.sum().clamp(min=1.0)
-
-        # fn = self.transformer.model.decoder
-        # xprime_inputs_embeds = fn.embed_tokens(gumbel_trg_neg_input_ids) * fn.embed_scale
-        # mask_matrix = torch.bmm(
-        #     gumbel_trg_pos_attn_mask.unsqueeze(-1),
-        #     gumbel_trg_neg_attn_mask.unsqueeze(1)
-        # ).float()
-        # inner_product = torch.bmm(
-        #     self.bilinear(pos_x_inputs_embeds),
-        #     xprime_inputs_embeds.transpose(1,2)
-        # )
-        # l1_norm = torch.abs(inner_product*mask_matrix).sum()/mask_matrix.sum().clamp(min=1.0)
-
-        # d(z,z') loss
-        # z_part = post_mu.squeeze(1)
-        # z_part_normalized = _normalize_z(z_part)
-        # z_rev_normalized = prior_mu.squeeze(1)
-        # loss_fn = torch.nn.BCEWithLogitsLoss(reduction='mean')
-        # loss_reg_z = loss_fn(input=z_rev_normalized, target=z_part_normalized.detach())
-        # loss = loss + lambda_reg_z * loss_reg_z
 
         loss_clas = 0
         if used_lambda_clas > 0:
             # [x',y'x,z']->hat(y)
-            # gumbel-sampling 使用teacher-force
+
             y_hat_inputs_embeds = self.gumbel_sampling_with_fake_input(
                 latent_z=self.latent_z_linear(post_z),
                 gumbel_src_input_ids=gumbel_src_input_ids, gumbel_src_attn_mask=gumbel_src_attn_mask,
@@ -580,18 +509,7 @@ class BartVaeSeq2Seq(nn.Module):
             neg_loss2 = outputs4[0]
             loss_clas = (pos_loss1+neg_loss2)/2
 
-            # scale_fn = self.latent_encoder.embed_scale
-            # # [bs, s1, dim]
-            # src_inputs_embeds = self.latent_encoder.embed_tokens(clas_pos_input_ids) * scale_fn
-            #
-            # reg_z_input_embeds = torch.cat((src_inputs_embeds, y_hat_inputs_embeds[:, 1:, :]), dim=1)
-            # reg_z_attn_mask = torch.cat((clas_pos_attn_mask, gumbel_trg_pos_attn_mask[:, 1:]), dim=1)
-            # regz_encoder_outputs = self.latent_encoder(
-            #     inputs_embeds=reg_z_input_embeds, attention_mask=reg_z_attn_mask, return_dict=False
-            # )
-            # regz_encoder_hidden_states = regz_encoder_outputs[0]
-            # regz_z, regz_mean, _ = self.sample_latent(regz_encoder_hidden_states, reg_z_attn_mask)
-        # vae_loss
+
         loss = rec_loss + evtkg_lambda*evt_pred_loss + current_beta * loss_kl + lambda_cx * x_loss
 
         if used_lambda_clas >0:
